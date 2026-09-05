@@ -25,23 +25,22 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $base = 'https://tarpmind.com/resources/app'
           New-Item -ItemType Directory -Force -Path payload | Out-Null
-          0..6 | ForEach-Object {
+          $parts = 0..6 | ForEach-Object {
             $name = ('p{0:D2}.txt' -f $_)
             Invoke-WebRequest -UseBasicParsing -Uri "$base/$name" -OutFile "payload/$name" -TimeoutSec 180
+            (Get-Content "payload/$name" -Raw).Trim()
           }
-          $b64 = Join-Path $PWD 'payload/package.b64'
-          Remove-Item $b64 -ErrorAction SilentlyContinue
-          0..6 | ForEach-Object {
-            $name = ('p{0:D2}.txt' -f $_)
-            Get-Content "payload/$name" -Raw | Add-Content -Path $b64 -NoNewline
-          }
+          $raw = [string]::Concat($parts)
           $zip = Join-Path $PWD 'payload/TarpMind-1.4.2.zip'
-          $raw = Get-Content $b64 -Raw
           [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($raw))
           $expected = '136609be286c324c56178075bcf64173b0793910e0668db00671e893d8ee8226'
           $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) { throw "Payload integrity check failed. Expected $expected got $actual" }
-          Expand-Archive -LiteralPath $zip -DestinationPath payload/extracted -Force
+          New-Item -ItemType Directory -Force -Path payload/extracted | Out-Null
+          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+          if (-not (Test-Path $sevenZip)) { throw '7-Zip is not available on the Windows runner.' }
+          & $sevenZip x $zip '-opayload/extracted' -y
+          if ($LASTEXITCODE -ne 0) { throw "7-Zip extraction failed with exit code $LASTEXITCODE" }
           $exe = Get-ChildItem payload/extracted -Filter TarpMind.exe -Recurse | Select-Object -First 1
           if (-not $exe) { throw 'TarpMind.exe was not found in verified payload.' }
           "APP_DIR=$($exe.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
