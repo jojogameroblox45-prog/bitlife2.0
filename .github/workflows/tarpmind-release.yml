@@ -38,7 +38,7 @@ jobs:
           $zip = Join-Path $PWD 'payload/TarpMind-1.4.2.zip'
           $raw = Get-Content $b64 -Raw
           [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($raw))
-          $expected = '7bb953ef54766a53707f4261a703997b4ffe555ee376cc90f28769c968f6bd44'
+          $expected = '136609be286c324c56178075bcf64173b0793910e0668db00671e893d8ee8226'
           $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) { throw "Payload integrity check failed. Expected $expected got $actual" }
           Expand-Archive -LiteralPath $zip -DestinationPath payload/extracted -Force
