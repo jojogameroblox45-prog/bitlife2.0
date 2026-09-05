@@ -1,0 +1,87 @@
+name: Build TarpMind Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tarpmind-release.yml'
+      - 'installer/**'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download verified TarpMind 1.4.2 payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = 'https://tarpmind.com/resources/app'
+          New-Item -ItemType Directory -Force -Path payload | Out-Null
+          0..6 | ForEach-Object {
+            $name = ('p{0:D2}.txt' -f $_)
+            Invoke-WebRequest -UseBasicParsing -Uri "$base/$name" -OutFile "payload/$name" -TimeoutSec 180
+          }
+          $b64 = Join-Path $PWD 'payload/package.b64'
+          Remove-Item $b64 -ErrorAction SilentlyContinue
+          0..6 | ForEach-Object {
+            $name = ('p{0:D2}.txt' -f $_)
+            Get-Content "payload/$name" -Raw | Add-Content -Path $b64 -NoNewline
+          }
+          $zip = Join-Path $PWD 'payload/TarpMind-1.4.2.zip'
+          $raw = Get-Content $b64 -Raw
+          [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($raw))
+          $expected = '7bb953ef54766a53707f4261a703997b4ffe555ee376cc90f28769c968f6bd44'
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Payload integrity check failed. Expected $expected got $actual" }
+          Expand-Archive -LiteralPath $zip -DestinationPath payload/extracted -Force
+          $exe = Get-ChildItem payload/extracted -Filter TarpMind.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw 'TarpMind.exe was not found in verified payload.' }
+          "APP_DIR=$($exe.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Verified payload SHA-256: $actual"
+          Write-Host "Application directory: $($exe.Directory.FullName)"
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
+      - name: Build standard Setup.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $makensis = 'C:\Program Files (x86)\NSIS\makensis.exe'
+          if (-not (Test-Path $makensis)) { $makensis = 'C:\Program Files\NSIS\makensis.exe' }
+          if (-not (Test-Path $makensis)) { throw 'makensis.exe not found.' }
+          & $makensis "/DAPP_DIR=$env:APP_DIR" installer/TarpMind.nsi
+          if ($LASTEXITCODE -ne 0) { throw "NSIS failed with exit code $LASTEXITCODE" }
+          $setup = Join-Path $PWD 'installer/TarpMind-Setup-1.4.2.exe'
+          if (-not (Test-Path $setup)) { throw 'Setup.exe was not produced.' }
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  TarpMind-Setup-1.4.2.exe" | Set-Content installer/TarpMind-Setup-1.4.2-SHA256.txt -Encoding ascii
+          Write-Host "Installer SHA-256: $hash"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TarpMind-Setup-1.4.2
+          path: |
+            installer/TarpMind-Setup-1.4.2.exe
+            installer/TarpMind-Setup-1.4.2-SHA256.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release delete v1.4.2 --yes --cleanup-tag 2>$null
+          if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
+          gh release create v1.4.2 installer/TarpMind-Setup-1.4.2.exe installer/TarpMind-Setup-1.4.2-SHA256.txt --title 'TarpMind 1.4.2 Private Beta' --notes 'Standard per-user NSIS installer built on a clean GitHub-hosted Windows runner from the verified TarpMind 1.4.2 application payload. This installer contains the app payload and does not use a PowerShell/CMD web-installer bootstrap at runtime.'
