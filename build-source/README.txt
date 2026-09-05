@@ -1,0 +1,1 @@
+TarpMind 1.4.2 build source is committed in this repository for GitHub Actions Windows release builds.
